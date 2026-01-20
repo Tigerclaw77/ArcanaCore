@@ -1,0 +1,12 @@
+{
+  "seed_policy": "recorded",
+  "prompt_style": "minimal",
+  "changes_applied": [
+    "pose"
+  ],
+  "constraints": [
+    "identity_locked",
+    "no_age_shift",
+    "no_stylization"
+  ]
+}

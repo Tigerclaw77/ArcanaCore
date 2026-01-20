@@ -1,0 +1,7 @@
+{
+  "character_id": "char_001",
+  "workflow": "wf_identity_v1",
+  "engine": "comfyui",
+  "timestamp": "2026-01-18T00:00:00Z",
+  "notes": "First controlled generation run using anchor-based identity constraints."
+}
