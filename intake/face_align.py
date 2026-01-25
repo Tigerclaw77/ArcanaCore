@@ -17,6 +17,8 @@ import math
 import cv2
 import numpy as np
 
+from intake.quality_gates import run_acceptance_gates, GateConfig
+
 
 # =========================
 # Constants (LOCKED v1)
@@ -63,9 +65,6 @@ def scale_image(image, scale):
 
 
 def transform_landmarks(landmarks_xy, mat, scale=1.0):
-    """
-    Apply affine transform + scale to landmarks.
-    """
     transformed = {}
     for idx, (x, y) in landmarks_xy.items():
         vec = np.array([x, y, 1.0], dtype=np.float32)
@@ -81,20 +80,28 @@ def transform_landmarks(landmarks_xy, mat, scale=1.0):
 def align_face(
     image_bgr: np.ndarray,
     landmarks_xy: dict,
-) -> np.ndarray:
+    run_gates: bool = True,
+    gate_config: GateConfig = GateConfig(),
+) -> tuple[np.ndarray, dict]:
     """
     Align and normalize a single face image.
 
     Args:
         image_bgr: input image (BGR)
         landmarks_xy: dict[int, (x, y)] in pixel coordinates
+        run_gates: run acceptance gates before alignment
+        gate_config: thresholds for gates
 
     Returns:
-        aligned face image (768x768 BGR)
+        (aligned face image 768x768 BGR, metrics dict)
 
     Raises:
-        ValueError if alignment fails
+        ValueError if alignment fails or gates fail
     """
+
+    metrics = {}
+    if run_gates:
+        metrics = run_acceptance_gates(image_bgr, landmarks_xy, gate_config)
 
     # --- Eye centers (original space) ---
     left_eye = mean_landmark([landmarks_xy[i] for i in LEFT_EYE_LANDMARKS])
@@ -107,11 +114,9 @@ def align_face(
     angle_deg = math.degrees(angle_rad)
 
     eye_center = tuple(((left_eye + right_eye) / 2).astype(np.float32))
-
     rot_mat = cv2.getRotationMatrix2D(eye_center, angle_deg, 1.0)
 
     rotated_img = rotate_image(image_bgr, rot_mat)
-
     rotated_landmarks = transform_landmarks(landmarks_xy, rot_mat)
 
     # --- Inter-eye distance after rotation ---
@@ -154,24 +159,60 @@ def align_face(
         borderMode=cv2.BORDER_REFLECT_101,
     )
 
-    # --- Final crop ---
+    # --- Final crop around target point ---
     h, w = translated.shape[:2]
-    cx, cy = target_x, target_y
-
-    x0 = int(cx - OUTPUT_SIZE // 2)
-    y0 = int(cy - OUTPUT_SIZE // 2)
+    x0 = int(target_x - OUTPUT_SIZE // 2)
+    y0 = int(target_y - OUTPUT_SIZE // 2)
     x1 = x0 + OUTPUT_SIZE
     y1 = y0 + OUTPUT_SIZE
 
-    if x0 < 0 or y0 < 0 or x1 > w or y1 > h:
-        raise ValueError("Aligned image out of bounds")
+    pad_left   = max(0, -x0)
+    pad_top    = max(0, -y0)
+    pad_right  = max(0, x1 - w)
+    pad_bottom = max(0, y1 - h)
+
+    if any([pad_left, pad_top, pad_right, pad_bottom]):
+        translated = cv2.copyMakeBorder(
+            translated,
+            pad_top,
+            pad_bottom,
+            pad_left,
+            pad_right,
+            borderType=cv2.BORDER_REFLECT_101,
+        )
+
+        # Adjust crop coordinates after padding
+        x0 += pad_left
+        x1 += pad_left
+        y0 += pad_top
+        y1 += pad_top
+
+        metrics["padded"] = True
+        metrics["pad_px"] = {
+            "left": int(pad_left),
+            "top": int(pad_top),
+            "right": int(pad_right),
+            "bottom": int(pad_bottom),
+        }
+    else:
+        metrics["padded"] = False
+
+
 
     aligned = translated[y0:y1, x0:x1]
 
     if aligned.shape[:2] != (OUTPUT_SIZE, OUTPUT_SIZE):
         raise ValueError("Final image incorrect size")
 
-    return aligned
+    # Add some alignment metrics
+    metrics = dict(metrics)
+    metrics.update({
+        "ied_target_px": float(IED_TARGET),
+        "scale": float(scale),
+        "angle_deg": float(angle_deg),
+    })
+
+    return aligned, metrics
 
 
 # =========================
@@ -182,11 +223,20 @@ def process_image(
     image_path: Path,
     landmarks_xy: dict,
     out_path: Path,
-):
+    run_gates: bool = True,
+    gate_config: GateConfig = GateConfig(),
+) -> dict:
+    """
+    Load image, align face, save output.
+
+    Returns:
+        metrics dict
+    """
     image = cv2.imread(str(image_path))
     if image is None:
         raise ValueError(f"Failed to read image: {image_path}")
 
-    aligned = align_face(image, landmarks_xy)
+    aligned, metrics = align_face(image, landmarks_xy, run_gates=run_gates, gate_config=gate_config)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_path), aligned)
+    return metrics

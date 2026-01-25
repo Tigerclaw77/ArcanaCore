@@ -7,6 +7,10 @@ Responsibilities:
 - detect exactly one dominant face
 - extract pixel-space landmarks
 - reject multi-face or low-confidence cases
+
+Note:
+- 468 landmarks (standard)
+- 478 landmarks when refine_landmarks=True (includes iris)
 """
 
 from typing import Dict, Tuple
@@ -75,7 +79,11 @@ def extract_landmarks(
         y_px = lm.y * h
         landmarks_xy[idx] = (x_px, y_px)
 
-    if len(landmarks_xy) != 468:
+    if len(landmarks_xy) not in (468, 478):
         raise ValueError(f"Unexpected landmark count: {len(landmarks_xy)}")
+
+    # Record landmark mode for downstream logic
+    landmark_count = len(landmarks_xy)
+
 
     return landmarks_xy
